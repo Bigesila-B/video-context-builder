@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 320" width="680" height="320" role="img">
+<title>帧精确抽帧原理对比</title>
+<desc>朴素写法把 -ss 放在 -i 之前再配合 fps 滤镜，取到的帧比声称的时间戳晚 2 帧；本项目改用 trim 按真实 PTS 裁剪、select 按帧号抽稀、showinfo 读回真实时间戳，取帧位置与声称的时间戳完全一致。</desc>
+<defs>
+<marker id="arrowR" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#A32D2D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<text x="340" y="26" text-anchor="middle" font-size="15" font-weight="500" fill="#2C2C2A" font-family="sans-serif">帧精确抽帧：为什么不能用 -ss + fps</text>
+
+<line x1="260" y1="56" x2="260" y2="250" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 4"/>
+<line x1="349" y1="56" x2="349" y2="250" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 4"/>
+<line x1="438" y1="56" x2="438" y2="250" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 4"/>
+<text x="260" y="48" text-anchor="middle" font-size="11" fill="#888780" font-family="sans-serif">期望位置（1/6 秒网格）</text>
+
+<text x="40" y="84" font-size="14" font-weight="500" fill="#2C2C2A" font-family="sans-serif">朴素写法</text>
+<text x="40" y="102" font-size="11" fill="#5F5E5A" font-family="monospace">-ss 1.5 -i in.mp4 -vf fps=6</text>
+<circle cx="296" cy="96" r="7" fill="#A32D2D"/>
+<circle cx="384" cy="96" r="7" fill="#A32D2D"/>
+<circle cx="473" cy="96" r="7" fill="#A32D2D"/>
+<line x1="260" y1="126" x2="296" y2="126" stroke="#A32D2D" stroke-width="1.5" marker-start="url(#arrowR)" marker-end="url(#arrowR)"/>
+<text x="278" y="144" text-anchor="middle" font-size="11" fill="#A32D2D" font-family="sans-serif">晚 2 帧</text>
+<rect x="70" y="158" width="540" height="22" fill="#FFFFFF"/>
+<text x="340" y="170" text-anchor="middle" font-size="12" fill="#A32D2D" font-family="sans-serif">B 帧的 DTS 比 PTS 滞后约 2 帧，seek 丢帧按 DTS 判断 → 画面比声称的时间晚 0.067s</text>
+
+<text x="40" y="196" font-size="14" font-weight="500" fill="#2C2C2A" font-family="sans-serif">本项目</text>
+<text x="40" y="214" font-size="11" fill="#5F5E5A" font-family="monospace">trim + select + showinfo</text>
+<circle cx="260" cy="208" r="7" fill="#0F6E56"/>
+<circle cx="349" cy="208" r="7" fill="#0F6E56"/>
+<circle cx="438" cy="208" r="7" fill="#0F6E56"/>
+<rect x="75" y="232" width="540" height="22" fill="#FFFFFF"/>
+<text x="340" y="244" text-anchor="middle" font-size="12" fill="#0F6E56" font-family="sans-serif">trim 按真实 PTS 裁剪 → select 的帧号天然对齐 → showinfo 读回的时间戳即为真值</text>
+
+<text x="260" y="272" text-anchor="middle" font-size="11" fill="#5F5E5A" font-family="monospace">1.500s</text>
+<text x="349" y="272" text-anchor="middle" font-size="11" fill="#5F5E5A" font-family="monospace">1.667s</text>
+<text x="438" y="272" text-anchor="middle" font-size="11" fill="#5F5E5A" font-family="monospace">1.833s</text>
+
+<text x="340" y="302" text-anchor="middle" font-size="12" fill="#5F5E5A" font-family="sans-serif">自检脚本用「每帧内容编码秒号+帧号」的合成视频做像素级反查，逐帧验证图与时间戳一致</text>
+</svg>

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行产物（只忽略根目录下跑出来的，examples/ 里的演示产物要保留）
+/*.video_context.json
+/*_assets/
+/out.json
+/temp/
+.vc_tmp/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

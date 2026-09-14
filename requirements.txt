@@ -1,0 +1,23 @@
+# video-context-builder 依赖
+#
+# 安装：
+#   pip install -r requirements.txt
+#
+# 说明：ffmpeg 是硬依赖，但**不必**系统安装 —— 装 imageio-ffmpeg 即可获得内置二进制。
+# 其余带 [可选] 标记的包缺失时会自动降级，不影响主流程。
+
+# —— 必需 ——
+Pillow>=9.0.0            # 拼图、缩放、画时间戳标签
+
+# —— 强烈建议 ——
+imageio-ffmpeg>=0.4.9    # 自带 ffmpeg 二进制（本机无系统 ffmpeg 时全靠它）
+
+# —— 可选：性能与精度 ——
+numpy>=1.23.0            # 帧尺寸/统计计算的加速（缺失则纯 Python 分支）
+faster-whisper>=1.0.0    # STT 音频转写（缺失则 STT 自动跳过，不报错）
+tiktoken>=0.5.0          # 更准确的文本 token 估算（缺失则用内置启发式）
+opencv-python-headless>=4.8.0   # 留作扩展：更精细的场景/运动检测（当前用 ffmpeg scene 滤镜，无需它）
+
+# —— 备注 ——
+# 本工具**不需要** torch：faster-whisper 底层用 ctranslate2，CPU 上 int8 量化即可跑。
+# GPU 加速时把 --whisper-device 设为 cuda、--whisper-compute-type 设为 float16。

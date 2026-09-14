@@ -1,0 +1,260 @@
+{
+  "meta": {
+    "duration": 20.0,
+    "fps": 30.0,
+    "has_audio": false,
+    "width": 640,
+    "height": 360,
+    "nb_frames": 600,
+    "video_codec": "",
+    "audio_codec": "",
+    "path": "demo_clip.mp4"
+  },
+  "mode": "standard",
+  "range": [
+    0.0,
+    20.0
+  ],
+  "custom_range": null,
+  "overview_sheets": [
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\overview_00_0s.jpg",
+      "layout": "4x4",
+      "cols": 4,
+      "rows": 4,
+      "cells": 7,
+      "sheet_width": 1602,
+      "sheet_height": 528,
+      "start": 0.0,
+      "end": 18.0,
+      "interval": 3.0
+    }
+  ],
+  "second_sheets": [
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0000_1s.jpg",
+      "start": 1.0,
+      "end": 2.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:01",
+      "frame_timestamps": [
+        1.0,
+        1.167,
+        1.333,
+        1.5,
+        1.667,
+        1.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0001_3s.jpg",
+      "start": 3.0,
+      "end": 4.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:03",
+      "frame_timestamps": [
+        3.0,
+        3.167,
+        3.333,
+        3.5,
+        3.667,
+        3.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0002_5s.jpg",
+      "start": 5.0,
+      "end": 6.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:05",
+      "frame_timestamps": [
+        5.0,
+        5.167,
+        5.333,
+        5.5,
+        5.667,
+        5.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0003_7s.jpg",
+      "start": 7.0,
+      "end": 8.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:07",
+      "frame_timestamps": [
+        7.0,
+        7.167,
+        7.333,
+        7.5,
+        7.667,
+        7.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0004_9s.jpg",
+      "start": 9.0,
+      "end": 10.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:09",
+      "frame_timestamps": [
+        9.0,
+        9.167,
+        9.333,
+        9.5,
+        9.667,
+        9.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0005_11s.jpg",
+      "start": 11.0,
+      "end": 12.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:11",
+      "frame_timestamps": [
+        11.0,
+        11.167,
+        11.333,
+        11.5,
+        11.667,
+        11.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0006_13s.jpg",
+      "start": 13.0,
+      "end": 14.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:13",
+      "frame_timestamps": [
+        13.0,
+        13.167,
+        13.333,
+        13.5,
+        13.667,
+        13.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0007_15s.jpg",
+      "start": 15.0,
+      "end": 16.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:15",
+      "frame_timestamps": [
+        15.0,
+        15.167,
+        15.333,
+        15.5,
+        15.667,
+        15.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0008_17s.jpg",
+      "start": 17.0,
+      "end": 18.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:17",
+      "frame_timestamps": [
+        17.0,
+        17.167,
+        17.333,
+        17.5,
+        17.667,
+        17.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    },
+    {
+      "path": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets\\sheets\\second_0009_19s.jpg",
+      "start": 19.0,
+      "end": 20.0,
+      "frames": 6,
+      "layout": "3x2",
+      "timestamp": "00:19",
+      "frame_timestamps": [
+        19.0,
+        19.167,
+        19.333,
+        19.5,
+        19.667,
+        19.833
+      ],
+      "sheet_width": 1202,
+      "sheet_height": 528
+    }
+  ],
+  "original_frames": [],
+  "transcript": [],
+  "transcript_info": {
+    "status": "skipped",
+    "reason": "未启用 STT",
+    "language": null,
+    "truncated": false,
+    "char_count": 0
+  },
+  "prompt": "你是一个视频理解助手。\n你没有直接看视频，只能看到按时间顺序排列的关键帧拼图、秒图和音频转写。\n每张秒图对应视频中的 1 秒，包含多个按时间顺序采样的帧。\n阅读顺序：从左到右，从上到下。\n请遵守：\n1. 只基于提供的材料回答；\n2. 引用时间戳，例如 [00:12:30]；\n3. 不确定时说明“抽样帧中未看到”；\n4. 区分画面信息和音频信息；\n5. 不要编造未出现的情节。\n\n=== 视频概况 ===\n- 时长：20.0 秒（00:20）\n- 分辨率：640x360，帧率 30.0 fps\n- 音轨：无\n- 处理模式：standard\n\n=== 材料清单（请按此顺序阅读附图） ===\n【总览图 overview_sheets】用于定位全局，每格是一个抽样帧：\n  - 图1: 00:00-00:18 布局 4x4，覆盖 7 个采样点，采样间隔约 3 秒\n\n【秒图 second_sheets】每张图 = 视频中的 1 秒（格内帧从左到右、从上到下按时间序）：\n  - 秒图1: 00:01 （00:01-00:02），6 帧 / 3x2 布局，帧时间戳 00:01 → 00:01\n  - 秒图2: 00:03 （00:03-00:04），6 帧 / 3x2 布局，帧时间戳 00:03 → 00:03\n  - 秒图3: 00:05 （00:05-00:06），6 帧 / 3x2 布局，帧时间戳 00:05 → 00:05\n  - 秒图4: 00:07 （00:07-00:08），6 帧 / 3x2 布局，帧时间戳 00:07 → 00:07\n  - 秒图5: 00:09 （00:09-00:10），6 帧 / 3x2 布局，帧时间戳 00:09 → 00:09\n  - 秒图6: 00:11 （00:11-00:12），6 帧 / 3x2 布局，帧时间戳 00:11 → 00:11\n  - 秒图7: 00:13 （00:13-00:14），6 帧 / 3x2 布局，帧时间戳 00:13 → 00:13\n  - 秒图8: 00:15 （00:15-00:16），6 帧 / 3x2 布局，帧时间戳 00:15 → 00:15\n  - 秒图9: 00:17 （00:17-00:18），6 帧 / 3x2 布局，帧时间戳 00:17 → 00:17\n  - 秒图10: 00:19 （00:19-00:20），6 帧 / 3x2 布局，帧时间戳 00:19 → 00:19\n\n【音频转写 transcript】无（视频无音轨，或本次未启用/不可用）。\n=== 音频转写（带时间戳） ===\n（无音频转写内容）\n\n=== 本次抽样说明 ===\n本片共 20.0s，为控制 token，只采样了 67 帧（总览每 3s 一帧；秒图共 10 张，每张覆盖 1 秒）。抽样帧之外的时间段没有被观测，不要凭想象补全。\n\n=== 回答要求 ===\n1) 先给结论/要点，再给证据；每条证据后面用 [MM:SS] 标注来自哪一秒。\n2) 严格区分「画面证据」（你在图上看到的）与「音频证据」（转写里的），分别标注。\n3) 抽样帧之间可能有跳跃；跳过的区间若被问到，回答「抽样帧中未看到，该区间未被采样」。\n4) 不推断未提供材料中不存在的人物、台词或情节。\n5) 如果材料不足以回答，明确说明「材料不足」，并列出你还需要哪个时间段的秒图。",
+  "token_estimate": {
+    "images": 9272,
+    "text": 580,
+    "total": 9852
+  },
+  "token_breakdown": {
+    "overview": 1102,
+    "second": 8170,
+    "originals": 0,
+    "prompt": 580,
+    "transcript": 0
+  },
+  "budget": {
+    "max_tokens": 50000,
+    "over_budget": false,
+    "ratio": 0.197,
+    "message": "token 估算 9852 <= 上限 50000（占比 20%，帧 67/96）"
+  },
+  "sampling_plan": {
+    "overview_interval": 3.0,
+    "overview_layout": "4x4",
+    "overview_frame_count": 7,
+    "second_layout": "3x2",
+    "second_frames_per_sheet": 6,
+    "second_sheet_count": 10,
+    "frames_total": 67,
+    "max_frames": 96,
+    "degraded": false
+  },
+  "warnings": [
+    "token 估算 9557 <= 上限 50000（占比 19%，帧 67/96）"
+  ],
+  "assets_dir": "H:\\项目\\workbuddy\\测试空间\\视频理解skills\\video-context-builder\\examples\\demo_output\\demo_standard_assets",
+  "model_preset": "generic",
+  "elapsed_sec": 1.88
+}
