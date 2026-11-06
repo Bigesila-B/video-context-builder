@@ -94,6 +94,7 @@ def _run_extract(
     vf: str,
     start: float,
     end: Optional[float],
+    limit: Optional[int] = None,
 ) -> Tuple[List[str], List[float], float]:
     """执行一次抽帧，返回 (图片路径列表, 每帧真实时间戳列表, 本次开始时间戳)。"""
     out = Path(out_dir)
@@ -110,7 +111,10 @@ def _run_extract(
                 args += ["-t", f"{(end - seek) + 0.5:.3f}"]
         elif end is not None:
             args += ["-t", f"{end + 0.5:.3f}"]
-        args += ["-i", video_path, "-vf", vf, *fps_mode_args, "-q:v", "2", "-f", "image2", pattern]
+        args += ["-i", video_path, "-vf", vf, *fps_mode_args]
+        if limit is not None:
+            args += ["-frames:v", str(limit)]
+        args += ["-q:v", "2", "-f", "image2", pattern]
         return args
 
     seek = max(0.0, float(start) - SEEK_PREROLL) if start > 0 else 0.0
@@ -165,7 +169,7 @@ def extract_interval_frames(
     step = max(1, int(round(interval * fps)))
     vf = _build_filter(start, end, step, max_width)
 
-    files, pts, t_start = _run_extract(video_path, out_dir, prefix, vf, start, end)
+    files, pts, t_start = _run_extract(video_path, out_dir, prefix, vf, start, end, limit=limit)
     frames = _pair(files, pts, start, interval)
 
     # 丢弃越过 end 的帧（trim 已大致裁好，这里做一次兜底）

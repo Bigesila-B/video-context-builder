@@ -1,16 +1,69 @@
 ---
 name: video-context-builder
 description: >
-  把视频转换成「多模态模型可消费的视频上下文包」：视频元数据 + 总览拼图 + 关键秒的秒图
-  （1 秒内抽多帧拼成一张图）+ 可选 STT 时间戳转写 + 面向目标模型的约束型提示词 + token 估算与超限提醒。
+  把视频转换成「多模态模型可消费的视频上下文包」：按时长与 token 预算自适应采样，视频元数据 + 总览拼图 + 关键片段图
+  （时间窗内抽多帧拼成一张图）+ 可选本地/API STT 转写 + 面向目标模型的约束型提示词 + token 估算与超限提醒。
   用于让「只有图片理解能力、没有视频输入能力」的模型间接理解视频内容。
   触发词：视频理解、看懂视频、视频转上下文、视频摘要、秒图、second sheet、关键帧拼图、contact sheet、
   视频抽帧、视频 token 估算、faster-whisper 转写、让模型看视频、video context builder、
   视频分段摘要 map-reduce、视频内容问答。
-agent_created: true
+metadata:
+  agent_created: true
 ---
 
 # Video Context Builder — 让「只能看图」的模型间接看懂视频
+
+## 默认自适应采样（auto / adaptive）
+
+优先使用 `--mode auto`。`adaptive` 是显式同义入口；其余显式模式保留传统策略。
+输出的 `mode` 仍按区间落到 standard、long-video 或 custom-range，实际策略看 `sampling_plan.strategy`。
+下文传统模式的帧上限、1 秒秒图及 4×4/5×5 布局不适用于自适应策略。
+
+```bash
+python scripts/build_video_context.py --video input.mp4 --mode auto --out out.json
+python scripts/build_video_context.py --video input.mp4 --mode auto --max-tokens 12000 --question "什么时候拿起钥匙？" --out out.json
+python scripts/build_video_context.py --video input.mp4 --mode auto --range 120-180 --max-tokens 8000 --out segment.json
+```
+
+- 按有效区间时长选目标密度；预算不足时放宽全程采样间隔，不只保留开头。总览默认 3×2，每图最多 6 格。
+- 省略 `--max-tokens` 时，总预算随时长从 6k 逐渐增长至 40k；显式值覆盖自动预算。
+- 总预算默认预留 10% 安全余量、15% 后续补看，以及约 10% 回答（256–2048 token）；本轮材料受 `budget.input_limit` 约束。
+- 局部图默认覆盖 2 秒、抽 6 帧。各时间分区内优先场景变化、语音和问题匹配的转写关键词。词面匹配不保证语义检索准确度。
+- 抽帧后按实际尺寸和 prompt 再核算预算；转写已嵌入 prompt，只计算一次，也不要在发请求时重复附上。
+- 完整转写保存在 `transcript_info.full_transcript_path`；仅所选原文片段进入 prompt，保留原始时间戳。
+- `budget.ready_to_send=false` 时先调整材料，不自动发送。脚本不调用目标模型。
+- `coverage.largest_unsampled_gap_sec` 报告实际采样时间点最大空白，含首尾边界；逐帧真实时间看 `frame_timestamps`。
+- 补看由外层 Agent 使用 `--mode auto --range a-b` 调度，累计用量由调用方记录，不能每轮重置预算后宣称仍在同一总额内。
+- 主包预算针对一次请求；map/reduce 是替代路线，须另查累计 map 输入和输出/reduce 成本，不能默认两条路线都调用。
+
+时长档位与预算细节见 [自适应采样](references/adaptive-sampling.md)。
+STT 支持本地 faster-whisper 和 OpenAI 兼容 API；模型选型见 [STT 建议](references/stt-models.md)。
+
+## 安装后配置 STT API
+
+用户选择 API 时，先读 [API 配置说明](references/stt-api.md)，核对所选服务的 endpoint、模型和返回格式。
+将 Skill 根目录 `stt.example.json` 复制为 `stt.local.json`，配置 `backend=api`、地址、模型与 `api_key_env`。
+密钥由用户在运行环境/密钥管理器提供；Agent 只检查存在性，不回显，不把值写入配置、对话日志或提交。
+配置优先级为显式参数 → STT_* 环境变量 → JSON → 默认本地后端；配置模板不自动生效。
+
+```bash
+python scripts/transcribe.py --check-config --stt-config stt.local.json
+python scripts/build_video_context.py --video input.mp4 --stt --stt-config stt.local.json --out out.json
+```
+
+配置检查不联网、不加载模型，不代表远程模型/余额/权限已验证。API 模式会向用户配置的服务上传音频；不因本地失败自动改用远程服务。
+API 不依赖 faster-whisper。请求失败不自动重试或换模型，避免重复计费；记录 `transcript_info.api_usage`。
+只有全文的 API 标注为音频块级范围，不能用块边界当作逐句/动作时间。时间戳格式和供应商差异见上述说明。
+`--range` 仅转写该区间并保留原片时间偏移。需要完全离线时显式 `--stt-backend local`。
+
+修改后除本文原有自检，还运行：
+
+```bash
+python -m unittest discover -s scripts -p test_adaptive_sampling.py -v
+python -m unittest discover -s scripts -p test_stt_api.py -v
+```
+
+以下表格说明传统固定模式。一般任务采用上面的自适应入口。
 
 ## 这个 Skill 解决什么问题
 
@@ -39,17 +92,17 @@ agent_created: true
 # 1) ffmpeg 是否可用（没有系统 ffmpeg 也没关系，装 imageio-ffmpeg 即可）
 python -c "import sys; sys.path.insert(0,'scripts'); from ffmpeg_utils import ffmpeg_bin; print(ffmpeg_bin())"
 
-# 2) 依赖补齐
-pip install -r requirements.txt
+# 2) 仅在缺依赖时补齐最低依赖
+pip install Pillow imageio-ffmpeg
 ```
 
 若报 `FFmpegNotFoundError`，执行 `pip install imageio-ffmpeg` 即可（自带二进制，无需管理员权限）。
-STT 需要 `pip install faster-whisper`；**未安装时本工具会自动跳过 STT 并在输出里说明原因，不会报错。**
+本地 STT 需要 `pip install faster-whisper`；未安装时该后端会跳过转写并说明原因。API 后端不需要此包。
 
 ## 用法一：CLI
 
 ```bash
-# 自动模式：<=10 分钟走 standard，>10 分钟走 long-video
+# 自动模式：按有效区间时长和预算安排密度
 python scripts/build_video_context.py --video input.mp4 --mode auto --stt \
     --max-tokens 50000 --out out.json
 
@@ -82,7 +135,7 @@ ctx = build_video_context(
 
 print(ctx["token_estimate"])       # {'images': ..., 'text': ..., 'total': ...}
 print(ctx["overview_sheets"])      # 总览图清单
-print(ctx["second_sheets"])        # 秒图清单（每张覆盖 1 秒）
+print(ctx["second_sheets"])        # 局部图清单（时长以 start/end 为准）
 print(ctx["prompt"])               # 直接发给目标模型的提示词
 ```
 
@@ -106,14 +159,14 @@ for s in ctx["overview_sheets"] + ctx["second_sheets"] + ctx.get("original_frame
 | `deep` | 需要看清细节/精确时间点 | 有 | 关键段 | 开 | 200 |
 | `long-video` | 时长 > 10 分钟 | 有 | 关键段 | 开 | 128 |
 | `custom-range` | 用户指定时间段 | 区间内 | 区间内逐秒 | 开 | 112 |
-| `auto` | 不指定 | 按时长自动选 standard / long-video | | | |
+| `auto` / `adaptive` | 默认 | 按有效时长和预算规划，总览 3×2 | 关键片段 2 秒窗 | 开 | 动态 |
 
 ## token 控制要点（重要）
 
 1. 处理前会**先估算**图像 token 与文本 token，再决定抽多少帧——不是先抽完再说。
 2. 超过 `--max-tokens` 时：
    - 输出 JSON 的 `budget.over_budget` 为 `true`，`warnings` 里写明超了多少；
-   - 默认**自动下调秒图数量**（从尾部砍，保留靠前的关键段），并明确告知降了多少；
+   - 默认**自动下调局部图数量**（全程分散保留时间点），并明确告知降了多少；
    - 用 `--no-degrade` 可改为「只提醒不动手」。
 3. 最省 token 的三种手段：`--mode quick`、`--range a-b`、调小 `--cell` / 调大 `--overview-interval`。
 
@@ -139,7 +192,7 @@ python scripts/build_video_context.py --video in.mp4 --mode deep \
 想看某个参数的最终实际取值，读 `out.json` 的 `sampling_plan.overview_interval` 与
 `sampling_plan.overview_frame_count`，不要只信命令行。
 
-## 长视频（>10 分钟）走 map-reduce
+## 长视频（至少 10 分钟）的可选 map-reduce 路线
 
 `mode=long-video` 时输出 JSON 里会多出 `map_reduce` 字段：
 
@@ -154,7 +207,7 @@ map_reduce.reduce_prompt_template  # 把各段摘要填进去，做最终汇总
 ```
 
 执行顺序：**逐段 map（每段一次调用）→ 收集摘要 → reduce（一次调用）**。
-这样单次请求的图片量可控，总 token 也不会爆炸。
+这样可拆分单次请求的图片量；累计 token 仍需另算，检查 estimated_map_input_tokens 并计入各段输出及 reduce 成本。
 
 ## 输出 JSON 结构
 
@@ -184,7 +237,7 @@ map_reduce.reduce_prompt_template  # 把各段摘要填进去，做最终汇总
 - **无音轨自动跳过 STT**：`transcript_info.status == "skipped"`，不会抛异常。
 - **不整段载入内存**：全流程 ffmpeg 流式解码，抽出的帧落盘到临时目录，收尾自动清理。
 - **临时文件**：默认清理；`--keep-temp` 可保留以便排查。
-- **越权边界**：本工具**不调用**目标模型，只生产材料 + 提示词 + 预算。调用方负责发请求。
+- **视频理解调用边界**：本工具不调用看图/视频理解模型，只准备材料；已配置并选用 API STT 时会上传音频进行转写。
 
 ## 自检（改完代码务必跑一遍）
 

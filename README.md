@@ -4,6 +4,68 @@
 
 一次调用产出：视频元数据 + 总览拼图 + 关键秒的**秒图** + 可选 STT 时间戳转写 + 约束型提示词 + token 估算与超限提醒。
 
+## 自适应采样
+
+默认 `auto` 现在结合有效视频时长与 token 预算决定实际密度，`adaptive` 为同义入口。
+短视频优先连续总览；长视频均匀覆盖全程，再在各时间段内优先查看场景变化、语音和与问题匹配的转写关键词。
+自适应总览默认 3×2 拼图，局部图默认 2 秒窗/6 帧。传统显式模式保留原有参数档案。
+
+```bash
+# 不指定预算：按有效时长自动选 6k–40k 总预算
+python scripts/build_video_context.py --video input.mp4 --mode auto --out out.json
+
+# 总预算包含回答、安全余量与补看预留；给问题可影响局部采样
+python scripts/build_video_context.py --video input.mp4 --mode auto --max-tokens 12000 --question "什么时候拿起钥匙？" --out out.json
+```
+
+| 区间时长 | 总览目标间隔 | 自动总预算示例 |
+|---|---|---|
+| 不超过 1 分钟 | 0.5 秒 | 30 秒 7k，60 秒 8k |
+| 1–5 分钟 | 1 秒 | 5 分钟 11k |
+| 5–20 分钟 | 2 秒 | 10 分钟 14k，20 分钟 18k |
+| 20–60 分钟 | 4 秒 | 60 分钟 29k |
+| 超过 60 分钟 | 8 秒 | 最多 40k |
+
+目标密度受预算和帧上限约束，不保证每个视频都达到表中数值。
+默认预留 10% 安全余量、15% 补看和约 10% 回答（256–2048 token）；12000 总预算时本轮输入最多 7800。
+最终图片和提示词会复算，转写只计一次。看 `budget.ready_to_send`、`budget.input_limit`、
+`coverage.largest_unsampled_gap_sec` 和实际 `frame_timestamps` 了解能否发送及真实覆盖。
+
+预算针对一次主请求；分段 map/reduce 是替代调用路线，其累计 map 输入单独报告，还需为各段输出及 reduce 分配预算。
+预留的补看需要调用方维护累计账本。脚本不会自动调用模型，也没有自动多轮补看。
+模型预设的 token 是近似估算，安全余量不保证实际账单误差上限。
+
+完整策略见 [自适应采样说明](references/adaptive-sampling.md)；
+轻量 STT 选型见 [STT 模型建议](references/stt-models.md)。目前支持本地 faster-whisper 和可配置的 OpenAI 兼容转写 API。
+
+### STT API：安装后一次配置
+
+复制根目录 `stt.example.json` 为 `stt.local.json`，填入服务地址、模型 ID 和密钥环境变量名。
+密钥本身由用户在运行环境安全配置，不写入 JSON；默认读取 `STT_API_KEY`。
+也支持 `STT_BACKEND / STT_API_BASE_URL / STT_API_MODEL` 等环境变量，或 `--stt-backend / --stt-api-*` 参数。
+
+```bash
+# 只检查配置与密钥存在性，不联网、不加载本地模型
+python scripts/transcribe.py --check-config --stt-config stt.local.json
+
+# 配置文件指定 backend=api 后，启用转写
+python scripts/build_video_context.py --video input.mp4 --stt --stt-config stt.local.json --out out.json
+
+# 显式切回本地
+python scripts/build_video_context.py --video input.mp4 --stt --stt-backend local --out out.json
+```
+
+API 模式不需要 faster-whisper 或供应商 SDK；支持分块上传、原片时间偏移和单独记录服务 usage。
+只返回文字时明确标注粗略时间范围；不自动重试或切换付费服务。
+详细字段、Agent 配置步骤、输出格式兼容性及测试见 [STT API 配置](references/stt-api.md)。
+
+```bash
+python -m unittest discover -s scripts -p test_adaptive_sampling.py -v
+python -m unittest discover -s scripts -p test_stt_api.py -v
+```
+
+下文固定采样表与固定模式帧上限用于兼容传统显式模式；默认 auto 使用上述自适应策略。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
   <img alt="处理流水线：探测元数据 → 采样规划与 token 预算 → 总览层/秒图层双路取帧 → 拼图 → STT 与提示词 → out.json" src="docs/architecture.png" width="680">
@@ -59,7 +121,7 @@ pip install Pillow imageio-ffmpeg
 # 1. 看一眼视频底细
 python scripts/probe_video.py input.mp4
 
-# 2. 生成上下文包（auto：<10 分钟走 standard，>=10 分钟走 long-video）
+# 2. 生成上下文包（auto：按有效时长与预算自适应采样）
 python scripts/build_video_context.py --video input.mp4 --mode auto --stt \
     --max-tokens 50000 --out out.json
 
@@ -119,7 +181,7 @@ for s in ctx["overview_sheets"] + ctx["second_sheets"] + ctx.get("original_frame
 | `deep` | 要看清细节 | 5x5 + 关键段 | 关键段 | 开 | 200 | ~25k |
 | `long-video` | 时长 >= 10 分钟 | 有 + 分段 | 关键段 | 开 | 128 | ~19k |
 | `custom-range` | 指定时间段 | 区间内 | 区间内逐秒 | 开 | 112 | 与区间长度成正比 |
-| `auto` | 不指定 | 按时长自动选 `standard` / `long-video` | | | | |
+| `auto` / `adaptive` | 默认 | 按时长和预算规划，3×2 总览 | 关键片段 2 秒窗 | 开 | 动态 | 动态 |
 
 ### 采样密度怎么算
 
@@ -147,9 +209,12 @@ for s in ctx["overview_sheets"] + ctx["second_sheets"] + ctx.get("original_frame
 
 ```
 --video PATH              输入视频（必填）
---mode {auto,quick,standard,deep,long-video,custom-range}   默认 auto
+--mode {auto,adaptive,quick,standard,deep,long-video,custom-range}   默认 auto
 --stt / --no-stt          默认按模式：standard/deep 开，quick 关
---max-tokens N            token 上限，默认 50000
+--max-tokens N            auto/adaptive 总预算默认按时长选 6k–40k；传统模式默认 50000 输入预算
+--response-tokens N       auto/adaptive 回答预留，默认约 10%，256–2048
+--safety-ratio R          auto/adaptive 安全余量比例，默认 0.10
+--revisit-ratio R         auto/adaptive 补看预留比例，默认 0.15
 --range A-B               只处理该时间段，如 120-180 或 00:02:00-00:03:00
 --out PATH                输出 JSON 路径（默认 <视频名>.video_context.json）
 --out-dir PATH            拼图产物目录
@@ -220,7 +285,7 @@ ffmpeg -copyts -ss <目标-1s> -t <长度> -i video \
 - 总览帧数由 `overview_interval` 与 `overview_cap` 共同决定，超上限则自动放宽间隔；
 - 秒图张数 =（总帧预算 − 总览帧数）÷ 每张帧数；
 - 用源视频宽高比 + 布局 + 格子尺寸**预测**出拼图成品尺寸（最后一张不满还会收缩），据此估图像 token；
-- 与 `--max-tokens` 比较，超了就从尾部砍秒图（保留靠前的关键段）并写入 `warnings`。
+- 与当前输入限额比较，超限时分散保留全程时间点并写入 `warnings`，抽帧后按实际材料再次核算。
 
 ### 3. 秒图与时间戳标签
 
@@ -246,7 +311,7 @@ ffmpeg -copyts -ss <目标-1s> -t <长度> -i video \
 
 执行顺序：**逐段 map（每段一次请求）→ 收集摘要 → reduce（一次汇总请求）**。
 单次请求的图片量可控，中途某段失败也能只重试那一段。
-**本工具不调用模型**，只生产材料 + 提示词 + 预算。
+**本工具不调用视频理解模型**，只准备材料 + 提示词 + 预算；选择 API STT 时会调用已配置服务转写音轨。
 
 ### 6. 处处优雅降级
 
@@ -389,7 +454,7 @@ video-context-builder/
 ## 已知边界
 
 - **不调用目标模型**。只生产「材料 + 提示词 + 预算」，请求由调用方发起。
-- **token 估算有 ±20% 偏差**。不同厂商图像计费口径不同（patch 类按 28×28、area 类按面积），
+- **token 估算没有固定误差保证**。当前预设为近似值，不同厂商的缩放、切块和计费口径不同，
   估算值用于预算控制与超限提醒，**不是计费依据**。
 - **「动作剧烈」用 scene_score 近似**。ffmpeg scene 滤镜给的是帧间差异分，对镜头切换敏感，
   对「同一镜头内的快速动作」不如光流敏感。

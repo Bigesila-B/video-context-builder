@@ -18,3 +18,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# STT user configuration and credentials
+stt.local.json
+.env
+.env.*
+!.env.example

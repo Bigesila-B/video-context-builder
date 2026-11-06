@@ -1,0 +1,17 @@
+{
+  "backend": "api",
+  "local": {
+    "model": "small",
+    "device": "auto",
+    "compute_type": "int8"
+  },
+  "api": {
+    "base_url": "https://your-provider.example/v1",
+    "model": "your-stt-model-id",
+    "api_key_env": "STT_API_KEY",
+    "response_format": "verbose_json",
+    "timeout": 120,
+    "chunk_seconds": 300,
+    "max_upload_mb": 20
+  }
+}

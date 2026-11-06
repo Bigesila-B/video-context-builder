@@ -25,7 +25,7 @@ from make_contact_sheet import format_timestamp  # noqa: E402
 # --------------------------------------------------------------------------- #
 SYSTEM_INSTRUCTION = """你是一个视频理解助手。
 你没有直接看视频，只能看到按时间顺序排列的关键帧拼图、秒图和音频转写。
-每张秒图对应视频中的 1 秒，包含多个按时间顺序采样的帧。
+每张局部图包含多个按时间顺序采样的帧；覆盖时长以材料清单和图上标注为准。
 阅读顺序：从左到右，从上到下。
 请遵守：
 1. 只基于提供的材料回答；
@@ -54,17 +54,19 @@ def build_material_manifest(
             lines.append(
                 f"  - 图{i}: {_fmt_range(s.get('start', 0), s.get('end', 0))} "
                 f"布局 {s.get('layout')}，覆盖 {s.get('cells', '?')} 个采样点，"
-                f"采样间隔约 {max(1, int(s.get('interval') or 0))} 秒"
+                f"目标采样间隔约 {float(s.get('interval') or 0):g} 秒，实际以每格时间戳为准"
             )
+            if s.get("frame_timestamps"):
+                lines.append("    采样时刻（秒）：" + ", ".join(f"{t:.3f}" for t in s["frame_timestamps"]))
         lines.append("")
 
     if second_sheets:
-        lines.append("【秒图 second_sheets】每张图 = 视频中的 1 秒（格内帧从左到右、从上到下按时间序）：")
+        lines.append("【局部图 second_sheets】覆盖下面各自标明的时间窗（格内帧从左到右、从上到下按时间序）：")
         for i, s in enumerate(second_sheets, 1):
             ts = s.get("frame_timestamps") or []
             span = ""
             if ts:
-                span = f"，帧时间戳 {format_timestamp(ts[0])} → {format_timestamp(ts[-1])}"
+                span = "，帧时间戳（秒） " + ", ".join(f"{t:.3f}" for t in ts)
             lines.append(
                 f"  - 秒图{i}: {s.get('timestamp') or format_timestamp(s.get('start', 0))} "
                 f"（{_fmt_range(s.get('start', 0), s.get('end', 0))}），"
@@ -94,8 +96,9 @@ def build_transcript_block(segments: Optional[List[Dict]], max_lines: int = 400)
         return "（无音频转写内容）"
     lines = []
     for s in segments[:max_lines]:
+        precision_note = "（音频块范围，非逐句时间）" if s.get("timestamp_source") == "chunk" else ""
         lines.append(
-            f"[{format_timestamp(s.get('start', 0))}-{format_timestamp(s.get('end', 0))}] {s.get('text', '')}"
+            f"[{format_timestamp(s.get('start', 0))}-{format_timestamp(s.get('end', 0))}]{precision_note} {s.get('text', '')}"
         )
     if len(segments) > max_lines:
         lines.append(f"...（其余 {len(segments) - max_lines} 段已省略）")

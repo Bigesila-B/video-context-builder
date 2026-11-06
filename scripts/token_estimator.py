@@ -9,7 +9,8 @@ Token 估算与预算控制。
 说明：不同厂商的图像 token 计费方式不同，这里用「业界常见近似」：
   - patch 类（GPT-4o/Qwen-VL/GLM-4V/InternVL 等）：按 28x28 像素一个 patch 计 1 token；
   - area 类（Claude 系）：约 宽度*高度/750；
-  估算值只用于「预算控制」和「超限提醒」，绝对值可能有 ±20% 偏差。
+  估算值只用于近似规划与超限提醒，没有经过跨模型校准的固定误差上限。
+  实际计费还受供应商缩放/切块/detail 参数影响；不能替代真实 usage。
 """
 
 from __future__ import annotations

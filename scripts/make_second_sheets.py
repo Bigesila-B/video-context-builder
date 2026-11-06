@@ -94,6 +94,8 @@ def speech_active_seconds(segments: Sequence[dict]) -> List[float]:
     """从 STT 的 segments 里提取「有语音活动」的秒（每段的起始秒）。"""
     out: List[float] = []
     for seg in segments or []:
+        if seg.get("timestamp_source") == "chunk":
+            continue
         try:
             out.append(round(float(seg.get("start", 0.0)), 3))
         except (TypeError, ValueError):
@@ -195,6 +197,7 @@ def build_second_sheets(
     src_fps: float = 25.0,
     max_width: int = 960,
     label: bool = True,
+    end_time: float | None = None,
 ) -> List[Dict]:
     """为每个关键秒生成一张秒图。
 
@@ -214,11 +217,14 @@ def build_second_sheets(
     results: List[Dict] = []
 
     for i, sec in enumerate(seconds):
+        actual_window = min(window, end_time - float(sec)) if end_time is not None else window
+        if actual_window <= 0:
+            continue
         frames = extract_window_frames(
             video_path,
             str(out),
             start=float(sec),
-            window=window,
+            window=actual_window,
             frames_in_window=int(frames_per_sheet),
             src_fps=src_fps,
             max_width=max_width,
@@ -229,8 +235,8 @@ def build_second_sheets(
 
         entries: List[Entry] = [(t, p) for t, p in frames]
         sheet_path = out / f"second_{i:04d}_{int(sec)}s.jpg"
-        title = f"SECOND SHEET  {format_timestamp(sec)} - {format_timestamp(sec + window)}  " \
-                f"({len(entries)} frames / {window:g}s)"
+        title = f"DETAIL SHEET  {format_timestamp(sec)} - {format_timestamp(sec + actual_window)}  " \
+                f"({len(entries)} frames / {actual_window:g}s)"
         info = build_sheet(
             entries,
             str(sheet_path),
@@ -242,7 +248,7 @@ def build_second_sheets(
         results.append({
             "path": str(sheet_path),
             "start": round(float(sec), 3),
-            "end": round(float(sec + window), 3),
+            "end": round(float(sec + actual_window), 3),
             "frames": len(entries),
             "layout": info["layout"],
             "timestamp": format_timestamp(sec),

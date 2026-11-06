@@ -189,7 +189,9 @@ def build_sheet(
         ly = y + ch
         draw.rectangle([x, ly, x + cw, ly + LABEL_BAR], fill=LABEL_BG)
         if idx % max(1, label_every) == 0:
-            draw.text((x + 5, ly + 3), f"#{idx + 1:03d} {format_timestamp(ts)}", font=font, fill=LABEL_FG)
+            millis = max(0, round(float(ts) * 1000))
+            frame_label = f"{format_timestamp(millis // 1000)}.{millis % 1000:03d}"
+            draw.text((x + 5, ly + 3), f"#{idx + 1:03d} {frame_label}", font=font, fill=LABEL_FG)
 
     # 四周边框
     draw.rectangle([0, 0, sheet_w - 1, sheet_h - 1], outline=(70, 70, 80))

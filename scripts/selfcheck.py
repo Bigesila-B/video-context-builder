@@ -330,7 +330,8 @@ def case_long_video(ck: Checker, work: Path) -> None:
     ck.eq(ctx["mode"], "long-video", "auto 对 >10 分钟视频选择 long-video")
     ck.eq(ctx["meta"]["duration"] > 599.0, True, "时长约 600s")
     ck.le(len(ctx["second_sheets"]), 30, "没有全量生成 600 张秒图")
-    ck.le(ctx["sampling_plan"]["frames_total"], 128, "总帧数受模式上限约束")
+    ck.le(ctx["sampling_plan"]["frames_total"], ctx["sampling_plan"]["max_frames"], "总帧数受当前策略上限约束")
+    ck.le(ctx["token_estimate"]["total"], ctx["budget"]["input_limit"], "自适应输入不侵占回答/安全/补看预留")
     ck.le(ctx["token_estimate"]["total"], 50000, "token 估算可控")
     ck.contains(ctx["prompt"], "抽样帧之外的时间段没有被观测", "prompt 里交代了抽样率与未观测区间")
 
@@ -341,6 +342,14 @@ def case_long_video(ck: Checker, work: Path) -> None:
         ck.ge(len(mr["chunks"]), 5, "chunks 已展开")
         ck.contains(mr["chunks"][0]["map_prompt"], "本段", "每段有 map 提示词")
         ck.contains(mr["reduce_prompt_template"], "分段摘要", "有 reduce 提示词模板")
+        all_samples_assigned = all(
+            any(c["start"] <= ts < c["end"] and s["path"] in [x["path"] for x in c["overview_sheets"]]
+                for c in mr["chunks"])
+            for s in ctx["overview_sheets"] for ts in s["frame_timestamps"]
+        )
+        ck.check(all_samples_assigned, "跨段拼图的每个采样点都关联到对应分段")
+        ck.eq(mr["estimated_map_input_tokens"], sum(c["token_estimate"]["total"] for c in mr["chunks"]),
+              "分段路线累计输入按每次调用计数")
         covered = all(11.99 <= c["start"] <= 600.0 for c in ctx["second_sheets"])
         ck.check(covered, "秒图起点都在视频时长内")
 
@@ -357,7 +366,7 @@ def case_stt_paths(ck: Checker, work: Path) -> None:
 
     ctx = build_video_context(str(video), mode="standard", stt=True, max_tokens=50000,
                               out=str(work / "audio.json"), out_dir=str(work / "audio_assets"),
-                              whisper_model="tiny", progress=True)
+                              whisper_model="tiny", stt_backend="local", progress=True)
 
     ck.eq(ctx["meta"]["has_audio"], True, "正确识别「有音轨」")
     status = ctx["transcript_info"]["status"]

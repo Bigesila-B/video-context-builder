@@ -29,6 +29,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from PIL import Image
+
 # 允许脚本直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -58,9 +60,14 @@ from prompt_builder import (  # noqa: E402
     build_map_prompt,
     build_prompt,
     build_reduce_prompt,
+    build_transcript_block,
 )
 from token_estimator import budget_check, estimate_image_tokens, estimate_pack, estimate_text_tokens  # noqa: E402
 from transcribe import transcribe  # noqa: E402
+from adaptive_sampling import (  # noqa: E402
+    duration_policy, evenly_spaced, plan_adaptive_sampling, select_transcript, token_allocation,
+)
+from stt_config import add_stt_arguments, api_options_from_args  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # 模式档案
@@ -126,7 +133,7 @@ AUTO_LONG_VIDEO_THRESHOLD = 600.0  # 秒；>= 10 分钟则 auto 走 long-video
 
 def resolve_mode(mode: str, duration: float) -> str:
     """auto 模式下按时长选择模式：>= 10 分钟走 long-video，否则 standard。"""
-    if mode != "auto":
+    if mode not in ("auto", "adaptive"):
         return mode
     if duration >= AUTO_LONG_VIDEO_THRESHOLD:
         return "long-video"
@@ -244,10 +251,10 @@ def plan_sampling(
     ov_cap = int(overview_cap) if overview_cap else int(profile["overview_cap"])
     if profile["second_cap"] > 0:
         # 有秒图层：总览最多占一半帧预算，另一半留给秒图
-        ov_cap = min(ov_cap, max(per_overview_sheet, max_frames // 2))
+        ov_cap = min(ov_cap, max_frames, max(1, max_frames // 2))
     else:
         # 无秒图层（quick）：总览可以吃掉全部帧预算
-        ov_cap = min(ov_cap, max(per_overview_sheet, max_frames))
+        ov_cap = min(ov_cap, max_frames)
 
     if span > 0:
         # 若按建议间隔抽帧会超过 cap，则自动放宽间隔
@@ -276,12 +283,13 @@ def plan_sampling(
         speech_starts: List[float] = []
 
         if mode == "custom-range" and custom_range:
-            # 指定区间：逐秒铺满
-            step = 1.0
-            t = lo
-            while t < hi - 1e-6 and len(second_seconds) < max_second_sheets:
-                second_seconds.append(round(t, 3))
-                t += step
+            wanted = math.ceil(span)
+            count = min(wanted, max_second_sheets)
+            step = span / count if wanted > count else 1.0
+            second_seconds = [round(lo + i * step, 3) for i in range(count)]
+            if count < wanted:
+                warnings.append(f"指定区间需 {wanted} 张逐秒图，帧预算仅容纳 {count} 张，改为全区间均匀采样，间隔 {step:g}s。")
+                degraded = True
         else:
             scene_changes = detect_scene_changes(
                 meta["path"], threshold=0.30, start=lo, duration=span if span > 0 else None
@@ -312,27 +320,26 @@ def plan_sampling(
     sec_fake = [_fake_sheet(sec_w, sec_h, sec_layout, second_frames) for _ in second_seconds]
 
     # 转写文本 token 也要算进去（按已压缩后的实际内容）
-    transcript_text = " ".join(str(s.get("text", "")) for s in (transcript_segments or []))
     est = estimate_pack(
         overview_sheets=ov_fake,
         second_sheets=sec_fake,
         prompt=prompt_text,
-        transcript=[{"text": transcript_text}] if transcript_text else [],
+        transcript=[],  # prompt_text already embeds the transcript
         model=model_preset,
     )
 
     frames_total = ov_count + len(second_seconds) * second_frames
 
-    # ---- 超限降级：优先砍秒图层（从尾部砍，保留靠前的关键段） ----
+    # ---- 超限降级：优先减少局部图，全程分散保留 ----
     if allow_degrade:
         sheets_before = len(second_seconds)
         guard = 0
         while est["total"] > max_tokens and len(second_seconds) > 0 and guard < 60:
             cut = max(1, len(second_seconds) // 5)
-            second_seconds = second_seconds[: max(0, len(second_seconds) - cut)]
+            second_seconds = evenly_spaced(second_seconds, max(0, len(second_seconds) - cut))
             sec_fake = [_fake_sheet(sec_w, sec_h, sec_layout, second_frames) for _ in second_seconds]
             est = estimate_pack(ov_fake, sec_fake, prompt_text,
-                                [{"text": transcript_text}] if transcript_text else [],
+                                [],
                                 model=model_preset)
             frames_total = ov_count + len(second_seconds) * second_frames
             degraded = True
@@ -381,7 +388,7 @@ def build_video_context(
     video_path: str,
     mode: str = "auto",
     stt: Optional[bool] = None,
-    max_tokens: int = 50000,
+    max_tokens: Optional[int] = None,
     custom_range: Any = None,
     out: Optional[str] = None,
     out_dir: Optional[str] = None,
@@ -394,22 +401,29 @@ def build_video_context(
     max_frames: Optional[int] = None,
     model_preset: Optional[str] = None,
     question: Optional[str] = None,
-    whisper_model: str = "small",
-    whisper_device: str = "auto",
-    whisper_compute_type: str = "int8",
+    whisper_model: Optional[str] = None,
+    whisper_device: Optional[str] = None,
+    whisper_compute_type: Optional[str] = None,
     language: Optional[str] = None,
     max_transcript_chars: int = 6000,
     allow_degrade: bool = True,
     keep_temp: bool = False,
     progress: bool = True,
+    response_tokens: Optional[int] = None,
+    safety_ratio: float = 0.10,
+    revisit_ratio: float = 0.15,
+    stt_backend: Optional[str] = None,
+    stt_config: Optional[str] = None,
+    stt_api_options: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """把视频转换成「视频上下文包」。
 
     Args:
         video_path: 输入视频
-        mode: auto / quick / standard / deep / long-video / custom-range
+        mode: auto / adaptive（按时长和预算）/ quick / standard / deep / long-video / custom-range
         stt: None 表示按模式默认（standard/deep 开，quick 关）
-        max_tokens: token 上限，超过则提醒并（默认）自动降级
+        max_tokens: auto/adaptive 的总预算（含回答、安全和补看预留）；省略时按时长选择。
+            显式传统模式仍将它作为输入材料上限，默认 50000。
         custom_range: (start, end) 秒，或 '120-180' 字符串；指定后只处理该段
         out: 输出 JSON 路径
         out_dir: 产物（拼图 + JSON）目录，默认取 out 所在目录
@@ -437,30 +451,55 @@ def build_video_context(
     # ---------- 1. 探测元数据 ----------
     meta = probe_video(str(video))
     duration = float(meta["duration"])
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("视频时长必须为有限正数")
     log(f"[1/6] 元数据: {duration:.2f}s, {meta['fps']}fps, "
         f"{meta['width']}x{meta['height']}, 音轨={'有' if meta['has_audio'] else '无'}")
 
     # ---------- 2. 解析模式与参数 ----------
-    mode = resolve_mode(mode, duration)
+    adaptive = mode in ("auto", "adaptive")
+    rng = parse_range(custom_range) if isinstance(custom_range, str) else custom_range
+    if rng:
+        if len(rng) != 2 or not all(math.isfinite(float(t)) for t in rng):
+            raise ValueError("指定时间段需包含两个有限时间值")
+        rng = (max(0.0, float(rng[0])), min(duration, float(rng[1])))
+        if not all(math.isfinite(t) for t in rng) or rng[1] <= rng[0]:
+            raise ValueError("指定时间段与视频没有有效交集")
+    span = rng[1] - rng[0] if rng else duration
+    mode = resolve_mode(mode, span)
     if mode not in MODE_PROFILES:
         raise ValueError(f"未知模式 '{mode}'，可选：{', '.join(MODE_PROFILES)} 或 auto")
+    if mode == "custom-range" and not rng:
+        raise ValueError("mode=custom-range 必须提供 custom_range，例如 '120-180'")
+    if rng:
+        mode = "custom-range"
     profile = dict(MODE_PROFILES[mode])
+    if not isinstance(cell, int) or cell <= 0 or not isinstance(second_frames, int) or second_frames <= 0:
+        raise ValueError("cell 和 second_frames 必须为正数/正整数")
+    if second_frames > math.prod(parse_layout(second_layout)):
+        raise ValueError("second_frames 超过 second_layout 容量，会造成帧丢失")
+    for name, value in (("max_frames", max_frames), ("overview_cap", overview_cap),
+                        ("overview_interval", overview_interval)):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ValueError(f"{name} 必须为有限正数")
+    if any(value is not None and (not isinstance(value, int) or isinstance(value, bool))
+           for value in (max_frames, overview_cap)):
+        raise ValueError("max_frames 和 overview_cap 必须为正整数")
+    if max_tokens is None:
+        max_tokens = duration_policy(span)["suggested_max_tokens"] if adaptive else 50000
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+        raise ValueError("max_tokens 必须为正整数")
+    allocation = token_allocation(max_tokens, response_tokens, safety_ratio, revisit_ratio) if adaptive else None
     if overview_interval:
         profile["overview_interval"] = float(overview_interval)
     if overview_layout:
         profile["overview_layout"] = str(overview_layout)
-    if max_frames:
+    if max_frames is not None:
         profile_max_frames = int(max_frames)
+    elif adaptive:
+        profile_max_frames = duration_policy(span)["max_frames"]
     else:
         profile_max_frames = int(profile["max_frames"])
-
-    rng = parse_range(custom_range) if isinstance(custom_range, str) else custom_range
-    if mode == "custom-range" and not rng:
-        raise ValueError("mode=custom-range 必须提供 custom_range，例如 '120-180'")
-    if rng and mode != "custom-range":
-        # 给了区间但不是 custom-range：自动升级为 custom-range，避免用户困惑
-        mode = "custom-range"
-        profile = dict(MODE_PROFILES["custom-range"])
 
     # STT 开关：None -> 按模式默认；无音轨强制关
     want_stt = profile["stt_default"] if stt is None else bool(stt)
@@ -489,7 +528,7 @@ def build_video_context(
     }
     transcript_segments: List[Dict] = []
     if want_stt:
-        log(f"[4/6] STT 转写中（faster-whisper / {whisper_model}）…")
+        log("[4/6] STT 转写中（按 local/API 配置）…")
         transcript_info = transcribe(
             str(video),
             model_size=whisper_model,
@@ -497,7 +536,10 @@ def build_video_context(
             compute_type=whisper_compute_type,
             language=language,
             has_audio=bool(meta["has_audio"]),
-            max_chars=max_transcript_chars,
+            max_chars=None if adaptive else max_transcript_chars,
+            work_dir=str(tmp_root / "audio"),
+            backend=stt_backend, config_file=stt_config, api_options=stt_api_options,
+            time_range=rng,
         )
         transcript_segments = transcript_info.get("segments", []) or []
         log(f"      -> {transcript_info['status']} ({len(transcript_segments)} 段)"
@@ -506,18 +548,42 @@ def build_video_context(
         log(f"[4/6] STT 已跳过（{transcript_info['reason']}）")
 
     # ---------- 5. 采样规划 + token 预算 ----------
+    full_transcript = list(transcript_segments)
+    transcript_source = None
+    if adaptive and full_transcript:
+        # Preserve verbatim full source locally; only selected evidence enters the request.
+        transcript_source = str(assets_dir / "transcript_full.json")
+        Path(transcript_source).write_text(json.dumps(full_transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+        lo_t, hi_t = rng if rng else (0.0, duration)
+        in_range = [s for s in full_transcript if s["start"] < hi_t and s["end"] > lo_t]
+        transcript_segments = select_transcript(in_range, int(allocation["input_limit"] * 0.22),
+                                                question, max_transcript_chars)
+        if len(transcript_segments) < len(in_range):
+            transcript_info["truncated"] = True
     draft_prompt = build_prompt(
         meta=meta, mode=mode, overview_sheets=[], second_sheets=[],
         transcript=transcript_segments, custom_range=list(rng) if rng else None,
         user_question=question,
     )
-    plan = plan_sampling(
-        meta=meta, mode=mode, profile=profile, max_frames=profile_max_frames,
-        max_tokens=max_tokens, cell=cell, second_frames=second_frames,
-        custom_range=rng, model_preset=model_preset, prompt_text=draft_prompt,
-        transcript_segments=transcript_segments, allow_degrade=allow_degrade,
-        overview_cap=overview_cap,
-    )
+    if adaptive:
+        lo_t, hi_t = rng if rng else (0.0, duration)
+        scenes = detect_scene_changes(str(video), threshold=0.30, start=lo_t, duration=hi_t - lo_t)
+        plan = plan_adaptive_sampling(
+            meta=meta, max_tokens=max_tokens, allocation=allocation, prompt_text=draft_prompt,
+            transcript=full_transcript, scene_changes=scenes, question=question, custom_range=rng,
+            cell=cell, second_frames=second_frames, second_layout=second_layout,
+            model_preset=model_preset, max_frames=profile_max_frames, overview_cap=overview_cap,
+            overview_interval=overview_interval, overview_layout=overview_layout, allow_degrade=allow_degrade,
+        )
+    else:
+        plan = plan_sampling(
+            meta=meta, mode=mode, profile=profile,
+            max_frames=max(1, profile_max_frames - int(profile.get("originals", 0))),
+            max_tokens=max_tokens, cell=cell, second_frames=second_frames,
+            custom_range=rng, model_preset=model_preset, prompt_text=draft_prompt,
+            transcript_segments=transcript_segments, allow_degrade=allow_degrade,
+            overview_cap=overview_cap,
+        )
     log(f"[5/6] 采样计划: 总览 {plan['overview_frame_count']} 帧 / {plan['overview_sheet_count']} 张"
         f"（间隔 {plan['overview_interval']:g}s）+ 秒图 {plan['second_sheet_count']} 张"
         f"（{second_frames} 帧/张）")
@@ -532,6 +598,7 @@ def build_video_context(
 
     # 6.1 总览图
     overview_sheets: List[Dict] = []
+    overview_entries = []
     ov_dir = frames_dir / "overview"
     remaining = plan["overview_frame_count"]
     if remaining > 0:
@@ -541,6 +608,7 @@ def build_video_context(
             max_width=960, prefix="ov",
             start=lo, end=hi if hi > lo else None, limit=remaining,
         )
+        overview_entries = frames
         cols, rows = parse_layout(plan["overview_layout"])
         per = cols * rows
         for i in range(0, len(frames), per):
@@ -565,9 +633,9 @@ def build_video_context(
         sec_dir = frames_dir / "second"
         second_sheets = build_second_sheets(
             str(video), str(sec_dir), plan["second_seconds"],
-            frames_per_sheet=second_frames, window=1.0,
+            frames_per_sheet=second_frames, window=plan.get("second_window", 1.0),
             layout=second_layout, cell=cell, src_fps=float(meta["fps"] or 25.0),
-            max_width=960,
+            max_width=960, end_time=hi,
         )
         # 把最终文件挪到产物目录（build_second_sheets 落在临时目录）
         for s in second_sheets:
@@ -583,17 +651,21 @@ def build_video_context(
 
     # 6.3 deep：重要帧原图
     original_frames: List[Dict] = []
-    n_orig = int(profile.get("originals") or 0)
+    n_orig = min(int(profile.get("originals") or 0),
+                 max(0, profile_max_frames - sum(s["cells"] for s in overview_sheets)
+                     - sum(s["frames"] for s in second_sheets)))
     if n_orig and plan["second_seconds"]:
         for sec in plan["second_seconds"][:n_orig]:
             p = assets_dir / f"original_{int(sec)}s.jpg"
             try:
                 extract_single_frame(str(video), str(p), sec,
                                      src_fps=float(meta["fps"] or 25.0), max_width=1280)
+                with Image.open(p) as original_image:
+                    original_w, original_h = original_image.size
                 original_frames.append({
                     "path": str(p), "timestamp": round(float(sec), 3),
                     "timestamp_label": format_timestamp(sec),
-                    "width": int(meta["width"]), "height": int(meta["height"]),
+                    "width": original_w, "height": original_h,
                 })
             except Exception:
                 pass
@@ -601,27 +673,83 @@ def build_video_context(
             log(f"      -> 重要帧原图 {len(original_frames)} 张")
 
     # ---------- 7. 提示词 + 最终 token 估算 ----------
-    coverage = (plan["frames_total"] / (duration * float(meta.get("fps") or 1) or 1))
-    token_note = (
-        f"本片共 {duration:.1f}s，为控制 token，只采样了 {plan['frames_total']} 帧"
-        f"（总览每 {plan['overview_interval']:g}s 一帧；秒图共 {len(second_sheets)} 张，每张覆盖 1 秒）。"
-        f"抽样帧之外的时间段没有被观测，不要凭想象补全。"
-    )
+    def actual_frame_count():
+        return (sum(s["cells"] for s in overview_sheets)
+                + sum(s["frames"] for s in second_sheets) + len(original_frames))
 
-    prompt = build_prompt(
-        meta=meta, mode=mode,
-        overview_sheets=overview_sheets, second_sheets=second_sheets,
-        transcript=transcript_segments, original_frames=original_frames,
-        user_question=question, custom_range=list(rng) if rng else None,
-        token_note=token_note,
-    )
+    def assemble_payload():
+        note = (
+            f"本片共 {duration:.1f}s，为控制 token，只采样了 {actual_frame_count()} 帧"
+            f"（总览目标间隔 {plan['overview_interval']:g}s；局部图共 {len(second_sheets)} 张，"
+            f"每张覆盖最多 {plan.get('second_window', 1.0):g} 秒）。"
+            "抽样帧之外的时间段没有被观测，不要凭想象补全。"
+        )
+        if adaptive and transcript_source:
+            note += "转写为按预算选出的原文片段，省略部分没有提供给你，不可据此推断没有对白。"
+        if transcript_info.get("timestamp_precision") == "chunk":
+            note += "音频转写只有音频块级时间范围，不能据此精确定位某句话出现的时刻。"
+        if transcript_info.get("partial"):
+            note += "音频转写中途失败，未提供部分的对白未知。"
+        built = build_prompt(
+            meta=meta, mode=mode, overview_sheets=overview_sheets, second_sheets=second_sheets,
+            transcript=transcript_segments, original_frames=original_frames,
+            user_question=question, custom_range=list(rng) if rng else None, token_note=note,
+        )
+        # The selected transcript is already embedded in the prompt: count it once.
+        return built, estimate_pack(overview_sheets, second_sheets, built, [],
+                                    original_frames=original_frames, model=model_preset)
 
-    estimate = estimate_pack(
-        overview_sheets=overview_sheets, second_sheets=second_sheets,
-        prompt=prompt, transcript=transcript_segments,
-        original_frames=original_frames, model=model_preset,
-    )
-    budget = budget_check(estimate, max_tokens, plan["frames_total"], profile_max_frames)
+    prompt, estimate = assemble_payload()
+    input_limit = allocation["input_limit"] if adaptive else max_tokens
+    before_fit = actual_frame_count()
+    # Reconcile actual sizes, manifest text, and extra originals after rendering.
+    while allow_degrade and estimate["total"] > input_limit:
+        if original_frames:
+            original_frames.pop()
+        elif second_sheets:
+            scores = {c["start"]: c["score"] for c in plan.get("detail_candidates", [])}
+            def drop_priority(s):
+                others = [abs(s["start"] - x["start"]) for x in second_sheets if x is not s]
+                return (scores.get(s["start"], 0), min(others, default=math.inf))
+            second_sheets.remove(min(second_sheets, key=drop_priority))
+        elif overview_entries:
+            keep = max(0, math.floor(len(overview_entries) * 0.8))
+            overview_entries = evenly_spaced(overview_entries, keep)
+            overview_sheets = []
+            per = math.prod(parse_layout(plan["overview_layout"]))
+            for i in range(0, len(overview_entries), per):
+                entries = overview_entries[i:i + per]
+                sp = sheets_dir / f"overview_fit_{i // per:03d}.jpg"
+                info = build_sheet(entries, str(sp), layout=plan["overview_layout"], cell=cell,
+                                   title=f"OVERVIEW #{i // per + 1} (budget adjusted)")
+                info["interval"] = plan["overview_interval"]
+                info["frame_timestamps"] = [round(t, 3) for t, _ in entries]
+                overview_sheets.append(info)
+        else:
+            break  # Prompt/question alone may exceed the limit; block delivery explicitly.
+        prompt, estimate = assemble_payload()
+    budget = budget_check(estimate, input_limit, actual_frame_count(), profile_max_frames)
+    if actual_frame_count() < before_fit:
+        plan["degraded"] = True
+        plan["warnings"].append(f"按实际产物复核预算后，帧数从 {before_fit} 调整为 {actual_frame_count()}；总览保留分散时间点。")
+    plan["warnings"] = [w for w in plan["warnings"] if not w.startswith(("token 估算 ", "⚠ token 估算 "))]
+    plan["warnings"].append(budget["message"])
+    if budget["over_budget"]:
+        plan["warnings"].append("最终材料仍超输入预算，ready_to_send=false；缩短问题/转写或提高预算后再发送。")
+    for warning in transcript_info.get("warnings", []):
+        plan["warnings"].append(warning)
+    overview_times = [t for s in overview_sheets for t in s.get("frame_timestamps", [])]
+    observed_times = sorted(set(overview_times + [t for s in second_sheets for t in s["frame_timestamps"]]))
+    edges = [lo] + observed_times + [hi]
+    coverage_report = {
+        "observed_frame_count": actual_frame_count(),
+        "overview_observed_fps": len(overview_times) / (hi - lo),
+        "largest_unsampled_gap_sec": round(max((b - a for a, b in zip(edges, edges[1:])), default=hi - lo), 3),
+        "first_observed_sec": observed_times[0] if observed_times else None,
+        "last_observed_sec": observed_times[-1] if observed_times else None,
+        "detail_windows": [[s["start"], s["end"]] for s in second_sheets],
+        "note": "离散采样时间点；未观测间隔不能解释为没有事件。",
+    }
 
     # ---------- 8. long-video：分段 map-reduce 计划 ----------
     map_reduce: Optional[Dict] = None
@@ -634,16 +762,23 @@ def build_video_context(
             e = min(hi, t + chunk_sec)
             cmap = build_map_prompt(meta, idx, math.ceil((hi - lo) / chunk_sec), t, e)
             c_overview = [
-                s for s in overview_sheets if s.get("start", 0) >= t - 1e-6 and s.get("start", 0) < e
+                s for s in overview_sheets if s.get("end", s.get("start", 0)) >= t and s.get("start", 0) < e
             ]
             c_second = [
-                s for s in second_sheets if s.get("start", 0) >= t - 1e-6 and s.get("start", 0) < e
+                s for s in second_sheets if s.get("end", 0) > t and s.get("start", 0) < e
             ]
+            c_transcript = [s for s in transcript_segments if s["start"] < e and s["end"] > t]
+            cmap += "\n\n只引用本段时间范围内的证据；跨界拼图的其他时间点属于相邻段。"
+            cmap += "\n\n=== 本段音频转写 ===\n" + build_transcript_block(c_transcript)
+            if question:
+                cmap += "\n\n=== 关注问题 ===\n" + question
+            c_estimate = estimate_pack(c_overview, c_second, cmap, [], model=model_preset)
             chunks.append({
                 "index": idx, "start": round(t, 3), "end": round(e, 3),
                 "start_label": format_timestamp(t), "end_label": format_timestamp(e),
                 "overview_sheets": c_overview, "second_sheets": c_second,
                 "map_prompt": cmap,
+                "transcript": c_transcript, "token_estimate": c_estimate,
             })
             idx += 1
             t = e
@@ -652,12 +787,17 @@ def build_video_context(
             "chunk_seconds": chunk_sec,
             "chunks": chunks,
             "reduce_prompt_template": build_reduce_prompt(meta, ["<第 i 段摘要>"], question),
+            "estimated_map_input_tokens": sum(c["token_estimate"]["total"] for c in chunks),
+            "budget_scope": "替代调用路线；重复拼图按每次调用计数，另需预算 map 输出、reduce 输入和输出。",
             "how_to": (
                 "对每个 chunk：把 chunk.overview_sheets + chunk.second_sheets 作为图片、"
                 "chunk.map_prompt 作为文本，发给目标模型得到该段摘要；"
                 "再把所有段摘要填入 reduce_prompt_template 的占位处，做一次汇总回答。"
             ),
         }
+        map_reduce["within_input_budget"] = map_reduce["estimated_map_input_tokens"] <= input_limit
+        if not map_reduce["within_input_budget"]:
+            plan["warnings"].append("分段 map 调用的累计输入超出本次输入预算；可直接发送主材料包，或重新为分段路线分配预算。")
         log(f"      -> long-video 分段计划：{len(chunks)} 段（每段 {chunk_sec:g}s）")
 
     # ---------- 9. 组装输出 ----------
@@ -677,7 +817,7 @@ def build_video_context(
         "range": plan["range"],
         "custom_range": list(rng) if rng else None,
         "overview_sheets": [
-            {k: v for k, v in s.items() if k != "frame_timestamps"} for s in overview_sheets
+            dict(s) for s in overview_sheets
         ],
         "second_sheets": second_sheets,
         "original_frames": original_frames,
@@ -688,6 +828,11 @@ def build_video_context(
             "language": transcript_info.get("language"),
             "truncated": transcript_info.get("truncated"),
             "char_count": transcript_info.get("char_count"),
+            "full_transcript_path": transcript_source,
+            "selected_segments": len(transcript_segments),
+            "source_segments": len(full_transcript),
+            **{k: transcript_info[k] for k in ("backend", "model", "timestamp_precision", "api_usage", "partial", "warnings")
+               if k in transcript_info},
         },
         "prompt": prompt,
         "token_estimate": {
@@ -701,18 +846,27 @@ def build_video_context(
             "over_budget": budget["over_budget"],
             "ratio": budget["ratio"],
             "message": budget["message"],
+            "input_limit": input_limit,
+            "ready_to_send": not budget["over_budget"] and bool(observed_times),
+            "remaining_input_tokens": max(0, input_limit - estimate["total"]),
+            **({"allocation": allocation} if adaptive else {}),
         },
         "sampling_plan": {
             "overview_interval": plan["overview_interval"],
             "overview_layout": plan["overview_layout"],
-            "overview_frame_count": plan["overview_frame_count"],
-            "second_layout": plan["second_layout"],
+            "overview_frame_count": len(overview_times),
+            "second_layout": second_layout,
             "second_frames_per_sheet": second_frames,
-            "second_sheet_count": plan["second_sheet_count"],
-            "frames_total": plan["frames_total"],
+            "second_sheet_count": len(second_sheets),
+            "second_window": plan.get("second_window", 1.0),
+            "frames_total": actual_frame_count(),
             "max_frames": profile_max_frames,
             "degraded": plan["degraded"],
+            "strategy": "adaptive" if adaptive else "legacy",
+            "planned_frames_total": plan["frames_total"],
+            **({"duration_policy": plan["duration_policy"]} if adaptive else {}),
         },
+        "coverage": coverage_report,
         "warnings": plan["warnings"],
         "assets_dir": str(assets_dir),
         "model_preset": model_preset or "generic",
@@ -744,8 +898,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="把视频转换成「多模态模型可消费的视频上下文包」（总览图 + 关键秒图 + 可选转写 + 提示词 + token 估算）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""示例：
-  # 自动模式（<=10 分钟走 standard，>10 分钟走 long-video）
-  python scripts/build_video_context.py --video in.mp4 --mode auto --stt --max-tokens 50000 --out out.json
+  # 按时长选择密度和总预算，预留回答和补看额度
+  python scripts/build_video_context.py --video in.mp4 --mode auto --out out.json
 
   # 只看 2:00-3:00，并逐秒出秒图
   python scripts/build_video_context.py --video in.mp4 --mode custom-range --range 120-180 --out seg.json
@@ -759,14 +913,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--video", required=True, help="输入视频路径")
     ap.add_argument("--mode", default="auto",
-                    choices=["auto", "quick", "standard", "deep", "long-video", "custom-range"],
+                    choices=["auto", "adaptive", "quick", "standard", "deep", "long-video", "custom-range"],
                     help="处理模式，默认 auto")
     stt_group = ap.add_mutually_exclusive_group()
     stt_group.add_argument("--stt", dest="stt", action="store_true", default=None,
                            help="启用 STT（默认按模式：standard/deep 开，quick 关）")
     stt_group.add_argument("--no-stt", dest="stt", action="store_false",
                            help="关闭 STT")
-    ap.add_argument("--max-tokens", type=int, default=50000, help="token 上限，默认 50000")
+    ap.add_argument("--max-tokens", type=int, default=None, help="auto/adaptive 总预算；默认按时长选择 6k–40k；传统模式默认 50k 输入预算")
+    ap.add_argument("--response-tokens", type=int, default=None, help="auto/adaptive 预留回答 token（默认总预算 10%%，最多 2048）")
+    ap.add_argument("--safety-ratio", type=float, default=0.10, help="auto/adaptive 估算安全余量比例，默认 0.10")
+    ap.add_argument("--revisit-ratio", type=float, default=0.15, help="auto/adaptive 补看预留比例，默认 0.15")
     ap.add_argument("--range", dest="custom_range", default=None,
                     help="只处理该时间段，如 120-180 或 00:02:00-00:03:00")
     ap.add_argument("--out", default=None, help="输出 JSON 路径")
@@ -783,9 +940,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--model-preset", default=None,
                     help="目标模型预设（generic/qwen-vl/gpt-4o/claude 等），影响 token 估算")
     ap.add_argument("--question", default=None, help="用户问题，追加到提示词末尾")
-    ap.add_argument("--whisper-model", default="small", help="faster-whisper 模型大小，默认 small")
-    ap.add_argument("--whisper-device", default="auto", help="cpu / cuda / auto")
-    ap.add_argument("--whisper-compute-type", default="int8", help="int8 / float16 / int8_float16")
+    ap.add_argument("--whisper-model", default=None, help="本地模型名/目录，默认 small，可由 STT 配置覆盖")
+    ap.add_argument("--whisper-device", default=None, help="cpu / cuda / auto")
+    ap.add_argument("--whisper-compute-type", default=None, help="int8 / float16 / int8_float16")
+    add_stt_arguments(ap)
     ap.add_argument("--language", default=None, help="转写语言，如 zh / en")
     ap.add_argument("--max-transcript-chars", type=int, default=6000, help="转写文本字数上限")
     ap.add_argument("--no-degrade", dest="allow_degrade", action="store_false", default=True,
@@ -823,6 +981,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             allow_degrade=args.allow_degrade,
             keep_temp=args.keep_temp,
             progress=not args.quiet,
+            response_tokens=args.response_tokens,
+            safety_ratio=args.safety_ratio,
+            revisit_ratio=args.revisit_ratio,
+            stt_backend=args.stt_backend,
+            stt_config=args.stt_config,
+            stt_api_options=api_options_from_args(args),
         )
     except FFmpegNotFoundError as exc:
         print(f"\n[环境错误] {exc}\n", file=sys.stderr)

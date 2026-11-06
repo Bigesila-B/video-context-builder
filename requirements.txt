@@ -14,7 +14,7 @@ imageio-ffmpeg>=0.4.9    # 自带 ffmpeg 二进制（本机无系统 ffmpeg 时�
 
 # —— 可选：性能与精度 ——
 numpy>=1.23.0            # 帧尺寸/统计计算的加速（缺失则纯 Python 分支）
-faster-whisper>=1.0.0    # STT 音频转写（缺失则 STT 自动跳过，不报错）
+faster-whisper>=1.0.0    # 可选：仅 local STT 需要；API 后端用标准库，无需此包
 tiktoken>=0.5.0          # 更准确的文本 token 估算（缺失则用内置启发式）
 opencv-python-headless>=4.8.0   # 留作扩展：更精细的场景/运动检测（当前用 ffmpeg scene 滤镜，无需它）
 
